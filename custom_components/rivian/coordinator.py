@@ -463,7 +463,6 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
         if power_state := items.get("powerState"):
             if power_state.get("value") == "sleep":
                 self._awake.clear()
-                self._clear_navigation_data()
             else:
                 self._awake.set()
         if charger_status := items.get("chargerStatus"):
