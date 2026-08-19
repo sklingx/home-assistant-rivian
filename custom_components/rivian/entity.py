@@ -12,7 +12,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo, EntityDescription
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_COORDINATOR, ATTR_USER, DOMAIN
+from .const import ATTR_COORDINATOR, ATTR_USER, DOMAIN, PARALLAX_NAVIGATION_FIELDS
 from .coordinator import (
     ChargingCoordinator,
     RivianDataUpdateCoordinator,
@@ -65,9 +65,13 @@ class RivianVehicleEntity(RivianEntity[VehicleCoordinator]):
     def available(self) -> bool:
         """Return the availability of the entity."""
         field = getattr(self.entity_description, "field", None)
-        if field and self._get_value(field) is None:
+        if (
+            field
+            and field not in PARALLAX_NAVIGATION_FIELDS
+            and self._get_value(field) is None
+        ):
             return False
-        return self._available
+        return self.coordinator.last_update_success and self._available
 
     def _get_value(self, key: str) -> Any | None:
         """Get a data value from the coordinator."""

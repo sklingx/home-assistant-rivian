@@ -34,6 +34,7 @@ from .const import (
     ATTR_VEHICLE,
     ATTR_WALLBOX,
     DOMAIN,
+    PARALLAX_NAVIGATION_FIELDS,
     SENSORS,
     WEEK_DAYS_ORDERED,
 )
@@ -163,6 +164,11 @@ class RivianSensorEntity(RivianVehicleEntity, SensorEntity):
             return _fn(self.coordinator)
 
         if (val := self._get_value(self.entity_description.field)) is None:
+            if (
+                getattr(self.entity_description, "field", None)
+                in PARALLAX_NAVIGATION_FIELDS
+            ):
+                return None
             return STATE_UNAVAILABLE if not self.native_unit_of_measurement else None
 
         rval = _fn(val) if (_fn := self.entity_description.value_lambda) else val
@@ -181,19 +187,21 @@ class RivianSensorEntity(RivianVehicleEntity, SensorEntity):
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         """Return the state attributes of the device."""
         try:
-            entity = self.coordinator.data[self.entity_description.field]
-            if entity is None:
+            entity = self.coordinator.data.get(self.entity_description.field)
+            if not entity or not isinstance(entity, dict):
                 return None
             if self.entity_description.value_lambda is None:
-                return {
-                    "last_update": entity["timeStamp"],
-                }
+                return (
+                    {"last_update": entity["timeStamp"]}
+                    if "timeStamp" in entity
+                    else None
+                )
             return {
-                "native_value": entity["value"],
-                "last_update": entity["timeStamp"],
-                "history": str(entity["history"]),
+                "native_value": entity.get("value"),
+                "last_update": entity.get("timeStamp"),
+                "history": str(entity.get("history", "")),
             }
-        except KeyError:
+        except (KeyError, TypeError):
             return None
 
 
