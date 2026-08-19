@@ -34,7 +34,7 @@ from .const import (
     INVALID_SENSOR_STATES,
     VEHICLE_STATE_API_FIELDS,
 )
-from .helpers import redact
+from .helpers import CLEAR_NAVIGATION_DATA, parse_parallax_navigation_payload, redact
 
 _LOGGER = logging.getLogger(__name__)
 T = TypeVar("T", bound=dict[str, Any] | list[dict[str, Any]])
@@ -286,6 +286,7 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
         )
         self._initial = asyncio.Event()
         self._unsub_handler: Coroutine[None, None, None] | None = None
+        self._parallax_unsub_handler: Coroutine[None, None, None] | None = None
         self._awake = asyncio.Event()
         self._charging_schedule: dict[str, Any] | None = None
         self._last_schedule_fetch: float = 0.0
@@ -353,6 +354,7 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
                 properties=VEHICLE_STATE_API_FIELDS,
                 callback=self._process_new_data,
             )
+            self._parallax_unsub_handler = await self._subscribe_parallax()
 
             try:
                 await asyncio.wait_for(self._initial.wait(), INITIAL_UPDATE_TIMEOUT)
@@ -363,6 +365,66 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
                 ) from err
 
         return self.data
+
+    async def _subscribe_parallax(self) -> Any:
+        """Subscribe to real-time Parallax RVM updates."""
+        try:
+            if not self.api._ws_monitor or not self.api._ws_monitor.connected:
+                return None
+            payload = {
+                "operationName": "ParallaxMessages",
+                "query": (
+                    "subscription ParallaxMessages($vehicleID: String!) {\n"
+                    "  parallaxMessages(vehicleId: $vehicleID) {\n"
+                    "    payload\n"
+                    "    sequenceNumber\n"
+                    "  }\n"
+                    "}"
+                ),
+                "variables": {"vehicleID": self.vehicle_id},
+            }
+            return await self.api._ws_monitor.start_subscription(
+                payload, self._process_parallax_data
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Failed to subscribe to Parallax updates for %s: %s",
+                self.vehicle_id,
+                err,
+            )
+            return None
+
+    @callback
+    def _process_parallax_data(self, data: dict[str, Any]) -> None:
+        """Process incoming Parallax RVM message."""
+        payload_wrapper = data.get("payload", {})
+        data_block = payload_wrapper.get("data", {})
+        parallax_msg = data_block.get("parallaxMessages")
+        if not parallax_msg or not isinstance(parallax_msg, dict):
+            return
+
+        raw_payload = parallax_msg.get("payload")
+        if not raw_payload:
+            self._clear_navigation_data()
+            return
+
+        nav_updates = parse_parallax_navigation_payload(raw_payload)
+        if nav_updates:
+            _LOGGER.debug(
+                "Vehicle %s parallax navigation update: %s",
+                self.vehicle_id,
+                redact(nav_updates),
+            )
+            current = dict(self.data) if self.data else {}
+            self.async_set_updated_data(current | nav_updates)
+            if not self._initial.is_set():
+                self._initial.set()
+
+    @callback
+    def _clear_navigation_data(self) -> None:
+        """Clear active navigation state."""
+        current = dict(self.data) if self.data else {}
+        self.async_set_updated_data(current | CLEAR_NAVIGATION_DATA)
 
     async def _fetch_data(self) -> ClientResponse:
         """Fetch the data."""
@@ -383,7 +445,8 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
                 self.config_entry.async_create_task(self.hass, task, eager_start=True)
             return
         vehicle_info = self._build_vehicle_info_dict(pdata.get(self.key, {}))
-        self.async_set_updated_data(vehicle_info)
+        current = dict(self.data) if self.data else {}
+        self.async_set_updated_data(current | vehicle_info)
         self._error_count = 0
         self._initial.set()
 
@@ -428,6 +491,9 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
             await unsub()
             self._unsub_handler = None
             self._initial.clear()
+        if unsub_p := self._parallax_unsub_handler:
+            await unsub_p()
+            self._parallax_unsub_handler = None
         if close_monitor and (monitor := self.api._ws_monitor):
             await monitor.close()
 
