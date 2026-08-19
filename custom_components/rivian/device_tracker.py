@@ -8,12 +8,13 @@ from typing import Any
 from homeassistant.components.device_tracker import SourceType, TrackerEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import ATTR_COORDINATOR, ATTR_VEHICLE, DOMAIN
-from .coordinator import VehicleCoordinator
+from .coordinator import NavigationCoordinator, VehicleCoordinator
 from .data_classes import RivianTrackerEntityDescription
-from .entity import RivianVehicleEntity
+from .entity import RivianEntity, RivianVehicleEntity
 
 LOCATION_DESCRIPTION = RivianTrackerEntityDescription(key="location", name="Location")
 DESTINATION_DESCRIPTION = RivianTrackerEntityDescription(
@@ -40,7 +41,10 @@ async def async_setup_entry(
     entities.extend(
         [
             RivianDestinationTracker(
-                coordinators[vehicle_id], entry, DESTINATION_DESCRIPTION, vehicle
+                coordinators[vehicle_id].navigation_coordinator,
+                entry,
+                DESTINATION_DESCRIPTION,
+                vehicle,
             )
             for vehicle_id, vehicle in vehicles.items()
         ]
@@ -109,20 +113,34 @@ class RivianDeviceEntity(RivianVehicleEntity, TrackerEntity):
             self._tracker_data = entity
 
 
-class RivianDestinationTracker(RivianVehicleEntity, TrackerEntity):
+class RivianDestinationTracker(RivianEntity[NavigationCoordinator], TrackerEntity):
     """A class representing the active navigation destination waypoint for a Rivian vehicle."""
 
     entity_description: RivianTrackerEntityDescription
 
     def __init__(
         self,
-        coordinator: VehicleCoordinator,
+        coordinator: NavigationCoordinator,
         config_entry: ConfigEntry,
         description: RivianTrackerEntityDescription,
         vehicle: dict[str, Any],
     ) -> None:
         """Create a Rivian destination tracker entity."""
-        super().__init__(coordinator, config_entry, description, vehicle)
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._config_entry = config_entry
+        self._vin = (vin := vehicle["vin"])
+        self._attr_unique_id = f"{vin}-{description.key}"
+        name = vehicle["name"]
+        model = vehicle["model"]
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, vin), (DOMAIN, vehicle["id"])},
+            name=name if name else model,
+            manufacturer="Rivian",
+            model=model,
+            serial_number=vin,
+            sw_version=None,
+        )
 
     @property
     def force_update(self) -> bool:
@@ -132,14 +150,16 @@ class RivianDestinationTracker(RivianVehicleEntity, TrackerEntity):
     @property
     def latitude(self) -> float | None:
         """Return latitude value of the destination."""
-        lat = self.coordinator.get("destination_latitude")
-        return float(lat) if lat is not None else None
+        if not self.coordinator.data or not self.coordinator.data.is_navigating:
+            return None
+        return self.coordinator.data.destination_latitude
 
     @property
     def longitude(self) -> float | None:
         """Return longitude value of the destination."""
-        lon = self.coordinator.get("destination_longitude")
-        return float(lon) if lon is not None else None
+        if not self.coordinator.data or not self.coordinator.data.is_navigating:
+            return None
+        return self.coordinator.data.destination_longitude
 
     @property
     def source_type(self) -> SourceType:
@@ -159,32 +179,35 @@ class RivianDestinationTracker(RivianVehicleEntity, TrackerEntity):
     @property
     def location_name(self) -> str | None:
         """Return a location name for the current position of the device."""
-        return self.coordinator.get("destination_name")
+        if not self.coordinator.data or not self.coordinator.data.is_navigating:
+            return None
+        return self.coordinator.data.destination_name
 
     @property
     def battery_level(self) -> int | None:
         """Return estimated battery level at destination."""
-        soc = self.coordinator.get("destination_arrival_soc")
-        return round(soc) if soc is not None else None
-
-    @property
-    def available(self) -> bool:
-        """Return True if destination coordinates are available."""
-        return self.latitude is not None and self.longitude is not None
+        if (
+            self.coordinator.data
+            and self.coordinator.data.is_navigating
+            and self.coordinator.data.arrival_soc is not None
+        ):
+            return round(self.coordinator.data.arrival_soc)
+        return None
 
     @property
     def extra_state_attributes(self) -> Mapping[str, Any]:
         """Return the state attributes of the destination."""
+        if not self.coordinator.data:
+            return {}
+        d = self.coordinator.data
         return {
-            "destination_name": self.coordinator.get("destination_name"),
-            "route_name": self.coordinator.get("destination_route_name"),
-            "eta": self.coordinator.get("destination_eta"),
-            "distance_remaining_meters": self.coordinator.get(
-                "destination_distance_remaining"
-            ),
-            "duration_remaining_seconds": self.coordinator.get(
-                "destination_duration_remaining"
-            ),
-            "arrival_soc": self.coordinator.get("destination_arrival_soc"),
-            "polyline": self.coordinator.get("destination_route_polyline"),
+            "is_navigating": d.is_navigating,
+            "destination_name": d.destination_name,
+            "route_name": d.route_name,
+            "eta": d.eta,
+            "distance_remaining_meters": d.distance_remaining_meters,
+            "duration_remaining_seconds": d.duration_remaining_seconds,
+            "arrival_soc": d.arrival_soc,
+            "polyline": d.route_polyline,
+            "last_update": d.last_update.isoformat() if d.last_update else None,
         }

@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 from custom_components.rivian.const import ATTR_COORDINATOR, ATTR_VEHICLE, DOMAIN
+from custom_components.rivian.coordinator import NavigationData
 from custom_components.rivian.device_tracker import (
     DESTINATION_DESCRIPTION,
     LOCATION_DESCRIPTION,
@@ -14,7 +15,7 @@ from homeassistant.components.device_tracker import SourceType
 from homeassistant.core import HomeAssistant
 
 
-def _build_mock_coordinator(data: dict | None = None) -> MagicMock:
+def _build_mock_vehicle_coordinator(data: dict | None = None) -> MagicMock:
     """Build a mock VehicleCoordinator."""
     coordinator = MagicMock()
     coordinator.data = data or {}
@@ -23,6 +24,9 @@ def _build_mock_coordinator(data: dict | None = None) -> MagicMock:
         if isinstance(coordinator.data.get(key), dict)
         else coordinator.data.get(key)
     )
+    coordinator.navigation_coordinator = MagicMock()
+    coordinator.navigation_coordinator.data = NavigationData()
+    coordinator.navigation_coordinator.last_update_success = True
     return coordinator
 
 
@@ -37,7 +41,7 @@ async def test_async_setup_entry_device_trackers(hass: HomeAssistant) -> None:
         "vin": "VIN1234567890",
         "model": "R1S",
     }
-    mock_coordinator = _build_mock_coordinator(
+    mock_coordinator = _build_mock_vehicle_coordinator(
         {
             "gnssLocation": {
                 "latitude": 37.7749,
@@ -70,7 +74,7 @@ async def test_async_setup_entry_device_trackers(hass: HomeAssistant) -> None:
 
 def test_rivian_device_entity_vehicle_location() -> None:
     """Test RivianDeviceEntity reporting vehicle GPS position."""
-    mock_coordinator = _build_mock_coordinator(
+    mock_coordinator = _build_mock_vehicle_coordinator(
         {
             "gnssLocation": {
                 "latitude": 37.7749,
@@ -103,18 +107,22 @@ def test_rivian_device_entity_vehicle_location() -> None:
 
 def test_rivian_destination_tracker_active_navigation() -> None:
     """Test RivianDestinationTracker when navigation route is active."""
-    data = {
-        "destination_name": {"value": "Irvine, CA"},
-        "destination_latitude": {"value": 33.7206991},
-        "destination_longitude": {"value": -117.7930813},
-        "destination_eta": {"value": "2026-08-19T06:51:40+00:00"},
-        "destination_distance_remaining": {"value": 11179.0},
-        "destination_duration_remaining": {"value": 605.0},
-        "destination_arrival_soc": {"value": 75.64},
-        "destination_route_name": {"value": "I-5 N"},
-        "destination_route_polyline": {"value": "omag_Av|kp_FoPs..."},
-    }
-    mock_coordinator = _build_mock_coordinator(data)
+    nav_data = NavigationData(
+        is_navigating=True,
+        destination_name="Irvine, CA",
+        destination_latitude=33.7206991,
+        destination_longitude=-117.7930813,
+        eta="2026-08-19T06:51:40+00:00",
+        distance_remaining_meters=11179.0,
+        duration_remaining_seconds=605.0,
+        arrival_soc=75.64,
+        route_name="I-5 N",
+        route_polyline="omag_Av|kp_FoPs...",
+    )
+    mock_nav_coordinator = MagicMock()
+    mock_nav_coordinator.data = nav_data
+    mock_nav_coordinator.last_update_success = True
+
     mock_entry = MagicMock()
     mock_vehicle = {
         "id": "vehicle_123",
@@ -124,7 +132,7 @@ def test_rivian_destination_tracker_active_navigation() -> None:
     }
 
     entity = RivianDestinationTracker(
-        coordinator=mock_coordinator,
+        coordinator=mock_nav_coordinator,
         config_entry=mock_entry,
         description=DESTINATION_DESCRIPTION,
         vehicle=mock_vehicle,
@@ -152,18 +160,11 @@ def test_rivian_destination_tracker_active_navigation() -> None:
 
 def test_rivian_destination_tracker_inactive_navigation() -> None:
     """Test RivianDestinationTracker when navigation is inactive / cancelled."""
-    data = {
-        "destination_name": {"value": None},
-        "destination_latitude": {"value": None},
-        "destination_longitude": {"value": None},
-        "destination_eta": {"value": None},
-        "destination_distance_remaining": {"value": None},
-        "duration_remaining_seconds": {"value": None},
-        "destination_arrival_soc": {"value": None},
-        "destination_route_name": {"value": None},
-        "destination_route_polyline": {"value": None},
-    }
-    mock_coordinator = _build_mock_coordinator(data)
+    nav_data = NavigationData(is_navigating=False)
+    mock_nav_coordinator = MagicMock()
+    mock_nav_coordinator.data = nav_data
+    mock_nav_coordinator.last_update_success = True
+
     mock_entry = MagicMock()
     mock_vehicle = {
         "id": "vehicle_123",
@@ -173,7 +174,7 @@ def test_rivian_destination_tracker_inactive_navigation() -> None:
     }
 
     entity = RivianDestinationTracker(
-        coordinator=mock_coordinator,
+        coordinator=mock_nav_coordinator,
         config_entry=mock_entry,
         description=DESTINATION_DESCRIPTION,
         vehicle=mock_vehicle,
@@ -183,8 +184,9 @@ def test_rivian_destination_tracker_inactive_navigation() -> None:
     assert entity.longitude is None
     assert entity.location_name is None
     assert entity.battery_level is None
-    assert entity.available is False
+    assert entity.available is True  # Coordinator is alive, coordinates are None
     attrs = entity.extra_state_attributes
+    assert attrs["is_navigating"] is False
     assert attrs["destination_name"] is None
     assert attrs["route_name"] is None
     assert attrs["eta"] is None

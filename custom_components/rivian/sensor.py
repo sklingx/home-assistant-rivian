@@ -34,11 +34,16 @@ from .const import (
     ATTR_VEHICLE,
     ATTR_WALLBOX,
     DOMAIN,
-    PARALLAX_NAVIGATION_FIELDS,
+    NAVIGATION_SENSORS,
     SENSORS,
     WEEK_DAYS_ORDERED,
 )
-from .coordinator import DriverKeyCoordinator, VehicleCoordinator, WallboxCoordinator
+from .coordinator import (
+    DriverKeyCoordinator,
+    NavigationCoordinator,
+    VehicleCoordinator,
+    WallboxCoordinator,
+)
 from .data_classes import (
     RivianSensorEntityDescription,
     RivianWallboxSensorEntityDescription,
@@ -77,6 +82,17 @@ async def async_setup_entry(
         if model in vehicle["model"]
         for description in descriptions
     ]
+
+    # Add navigation entities
+    entities.extend(
+        RivianNavigationSensorEntity(
+            vehicle_coordinators[vehicle_id].navigation_coordinator,
+            description,
+            vehicle,
+        )
+        for vehicle_id, vehicle in vehicles.items()
+        for description in NAVIGATION_SENSORS
+    )
 
     # Add charging entities
     entities.extend(
@@ -164,11 +180,6 @@ class RivianSensorEntity(RivianVehicleEntity, SensorEntity):
             return _fn(self.coordinator)
 
         if (val := self._get_value(self.entity_description.field)) is None:
-            if (
-                getattr(self.entity_description, "field", None)
-                in PARALLAX_NAVIGATION_FIELDS
-            ):
-                return None
             return STATE_UNAVAILABLE if not self.native_unit_of_measurement else None
 
         rval = _fn(val) if (_fn := self.entity_description.value_lambda) else val
@@ -187,22 +198,73 @@ class RivianSensorEntity(RivianVehicleEntity, SensorEntity):
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         """Return the state attributes of the device."""
         try:
-            entity = self.coordinator.data.get(self.entity_description.field)
-            if not entity or not isinstance(entity, dict):
+            entity = self.coordinator.data[self.entity_description.field]
+            if entity is None:
                 return None
             if self.entity_description.value_lambda is None:
-                return (
-                    {"last_update": entity["timeStamp"]}
-                    if "timeStamp" in entity
-                    else None
-                )
+                return {
+                    "last_update": entity["timeStamp"],
+                }
             return {
-                "native_value": entity.get("value"),
-                "last_update": entity.get("timeStamp"),
-                "history": str(entity.get("history", "")),
+                "native_value": entity["value"],
+                "last_update": entity["timeStamp"],
+                "history": str(entity["history"]),
             }
-        except (KeyError, TypeError):
+        except KeyError:
             return None
+
+
+class RivianNavigationSensorEntity(RivianEntity[NavigationCoordinator], SensorEntity):
+    """Representation of a Rivian navigation sensor entity."""
+
+    entity_description: RivianSensorEntityDescription
+
+    def __init__(
+        self,
+        coordinator: NavigationCoordinator,
+        description: RivianSensorEntityDescription,
+        vehicle: dict[str, Any],
+    ) -> None:
+        """Initialize the navigation sensor entity."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._vin = (vin := vehicle["vin"])
+        self._attr_unique_id = f"{vin}-{description.key}"
+        name = vehicle["name"]
+        model = vehicle["model"]
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, vin), (DOMAIN, vehicle["id"])},
+            name=name if name else model,
+            manufacturer="Rivian",
+            model=model,
+            serial_number=vin,
+        )
+
+    @property
+    def native_value(self) -> StateType:
+        """Return the state of the sensor."""
+        if not self.coordinator.data or not self.coordinator.data.is_navigating:
+            return None
+        val = getattr(self.coordinator.data, self.entity_description.field, None)
+        if val is None:
+            return None
+        if fn := self.entity_description.value_lambda:
+            return fn(val)
+        return val
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
+        """Return entity specific state attributes."""
+        if not self.coordinator.data:
+            return None
+        return {
+            "is_navigating": self.coordinator.data.is_navigating,
+            "last_update": (
+                self.coordinator.data.last_update.isoformat()
+                if self.coordinator.data.last_update
+                else None
+            ),
+        }
 
 
 class RivianChargingSensorEntity(RivianChargingEntity, SensorEntity):
