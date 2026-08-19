@@ -152,6 +152,27 @@ class RivianDestinationTracker(RivianVehicleEntity, TrackerEntity):
         return "mdi:map-marker-destination"
 
     @property
+    def location_accuracy(self) -> int:
+        """Return the location accuracy of the destination."""
+        return 0
+
+    @property
+    def location_name(self) -> str | None:
+        """Return a location name for the current position of the device."""
+        return self.coordinator.get("destination_name")
+
+    @property
+    def battery_level(self) -> int | None:
+        """Return estimated battery level at destination."""
+        soc = self.coordinator.get("destination_arrival_soc")
+        return round(soc) if soc is not None else None
+
+    @property
+    def available(self) -> bool:
+        """Return True if destination coordinates are available."""
+        return self.latitude is not None and self.longitude is not None
+
+    @property
     def extra_state_attributes(self) -> Mapping[str, Any]:
         """Return the state attributes of the destination."""
         return {

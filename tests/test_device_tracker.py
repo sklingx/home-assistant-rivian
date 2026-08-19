@@ -134,6 +134,10 @@ def test_rivian_destination_tracker_active_navigation() -> None:
     assert entity.longitude == -117.7930813
     assert entity.source_type == SourceType.GPS
     assert entity.icon == "mdi:map-marker-destination"
+    assert entity.location_name == "Irvine, CA"
+    assert entity.location_accuracy == 0
+    assert entity.battery_level == 76
+    assert entity.available is True
     assert entity.force_update is False
 
     attrs = entity.extra_state_attributes
@@ -154,7 +158,7 @@ def test_rivian_destination_tracker_inactive_navigation() -> None:
         "destination_longitude": {"value": None},
         "destination_eta": {"value": None},
         "destination_distance_remaining": {"value": None},
-        "destination_duration_remaining": {"value": None},
+        "duration_remaining_seconds": {"value": None},
         "destination_arrival_soc": {"value": None},
         "destination_route_name": {"value": None},
         "destination_route_polyline": {"value": None},
@@ -177,6 +181,9 @@ def test_rivian_destination_tracker_inactive_navigation() -> None:
 
     assert entity.latitude is None
     assert entity.longitude is None
+    assert entity.location_name is None
+    assert entity.battery_level is None
+    assert entity.available is False
     attrs = entity.extra_state_attributes
     assert attrs["destination_name"] is None
     assert attrs["route_name"] is None
