@@ -16,6 +16,11 @@ from .data_classes import RivianTrackerEntityDescription
 from .entity import RivianVehicleEntity
 
 LOCATION_DESCRIPTION = RivianTrackerEntityDescription(key="location", name="Location")
+DESTINATION_DESCRIPTION = RivianTrackerEntityDescription(
+    key="destination_location",
+    name="Destination",
+    translation_key="destination",
+)
 
 
 async def async_setup_entry(
@@ -26,12 +31,20 @@ async def async_setup_entry(
     vehicles: dict[str, Any] = data[ATTR_VEHICLE]
     coordinators: dict[str, VehicleCoordinator] = data[ATTR_COORDINATOR][ATTR_VEHICLE]
 
-    entities = [
+    entities: list[TrackerEntity] = [
         RivianDeviceEntity(
             coordinators[vehicle_id], entry, LOCATION_DESCRIPTION, vehicle
         )
         for vehicle_id, vehicle in vehicles.items()
     ]
+    entities.extend(
+        [
+            RivianDestinationTracker(
+                coordinators[vehicle_id], entry, DESTINATION_DESCRIPTION, vehicle
+            )
+            for vehicle_id, vehicle in vehicles.items()
+        ]
+    )
 
     async_add_entities(entities)
 
@@ -94,3 +107,63 @@ class RivianDeviceEntity(RivianVehicleEntity, TrackerEntity):
                 self.async_write_ha_state()
         except Exception:  # noqa: BLE001
             self._tracker_data = entity
+
+
+class RivianDestinationTracker(RivianVehicleEntity, TrackerEntity):
+    """A class representing the active navigation destination waypoint for a Rivian vehicle."""
+
+    entity_description: RivianTrackerEntityDescription
+
+    def __init__(
+        self,
+        coordinator: VehicleCoordinator,
+        config_entry: ConfigEntry,
+        description: RivianTrackerEntityDescription,
+        vehicle: dict[str, Any],
+    ) -> None:
+        """Create a Rivian destination tracker entity."""
+        super().__init__(coordinator, config_entry, description, vehicle)
+
+    @property
+    def force_update(self) -> bool:
+        """Disable forced updates since updates come from the coordinator."""
+        return False
+
+    @property
+    def latitude(self) -> float | None:
+        """Return latitude value of the destination."""
+        lat = self.coordinator.get("destination_latitude")
+        return float(lat) if lat is not None else None
+
+    @property
+    def longitude(self) -> float | None:
+        """Return longitude value of the destination."""
+        lon = self.coordinator.get("destination_longitude")
+        return float(lon) if lon is not None else None
+
+    @property
+    def source_type(self) -> SourceType:
+        """Return the source type of the device."""
+        return SourceType.GPS
+
+    @property
+    def icon(self) -> str:
+        """Return destination icon."""
+        return "mdi:map-marker-destination"
+
+    @property
+    def extra_state_attributes(self) -> Mapping[str, Any]:
+        """Return the state attributes of the destination."""
+        return {
+            "destination_name": self.coordinator.get("destination_name"),
+            "route_name": self.coordinator.get("destination_route_name"),
+            "eta": self.coordinator.get("destination_eta"),
+            "distance_remaining_meters": self.coordinator.get(
+                "destination_distance_remaining"
+            ),
+            "duration_remaining_seconds": self.coordinator.get(
+                "destination_duration_remaining"
+            ),
+            "arrival_soc": self.coordinator.get("destination_arrival_soc"),
+            "polyline": self.coordinator.get("destination_route_polyline"),
+        }

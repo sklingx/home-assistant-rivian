@@ -51,6 +51,11 @@
         "name": "Charge port door"
       }
     },
+    "device_tracker": {
+      "destination": {
+        "name": "Destination"
+      }
+    },
     "number": {
       "charging_schedule_amperage": {
         "name": "Charging schedule amperage"
@@ -59,6 +64,9 @@
     "sensor": {
       "active_driver": {
         "name": "Active driver"
+      },
+      "battery_level_at_destination": {
+        "name": "Battery level at destination"
       },
       "charging_schedule_days": {
         "name": "Charging schedule days",
@@ -75,6 +83,18 @@
           "plugged_in": "Plugged in",
           "charging": "Charging"
         }
+      },
+      "destination": {
+        "name": "Destination"
+      },
+      "distance_to_destination": {
+        "name": "Distance to destination"
+      },
+      "navigation_eta": {
+        "name": "Navigation ETA"
+      },
+      "time_to_destination": {
+        "name": "Time to destination"
       }
     },
     "switch": {

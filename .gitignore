@@ -161,3 +161,12 @@ cython_debug/
 
 # Home Assistant
 config/
+test_config/
+
+# Developer CLI tools, captured test fixtures & CLI test harnesses
+tools/
+tests/fixtures/
+tests/test_listen_*.py
+tests/test_inspect_vehicle_state.py
+*.dump.json
+*dump.json
