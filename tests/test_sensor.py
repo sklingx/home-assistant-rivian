@@ -2,14 +2,14 @@
 
 from unittest.mock import MagicMock
 
-from custom_components.rivian.const import SENSORS
-from custom_components.rivian.coordinator import VehicleCoordinator
+from custom_components.rivian.const import NAVIGATION_SENSORS
+from custom_components.rivian.coordinator import NavigationCoordinator, NavigationData
 from custom_components.rivian.helpers import (
     ProtobufRawDecoder,
     parse_parallax_navigation_payload,
     to_timestamp_iso,
 )
-from custom_components.rivian.sensor import RivianSensorEntity
+from custom_components.rivian.sensor import RivianNavigationSensorEntity
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import PERCENTAGE, UnitOfLength, UnitOfTime
 
@@ -84,64 +84,67 @@ def test_parse_empty_or_invalid_payloads() -> None:
 
 
 def test_navigation_sensor_descriptions_defined() -> None:
-    """Verify all navigation sensor entity descriptions are registered under SENSORS['R1']."""
-    r1_sensors = {desc.key: desc for desc in SENSORS["R1"]}
+    """Verify all navigation sensor entity descriptions are registered under NAVIGATION_SENSORS."""
+    nav_sensors = {desc.key: desc for desc in NAVIGATION_SENSORS}
 
-    assert "destination" in r1_sensors
-    assert r1_sensors["destination"].field == "destination_name"
+    assert "destination" in nav_sensors
+    assert nav_sensors["destination"].field == "destination_name"
 
-    assert "navigation_eta" in r1_sensors
-    assert r1_sensors["navigation_eta"].device_class == SensorDeviceClass.TIMESTAMP
-    assert r1_sensors["navigation_eta"].field == "destination_eta"
+    assert "navigation_eta" in nav_sensors
+    assert nav_sensors["navigation_eta"].device_class == SensorDeviceClass.TIMESTAMP
+    assert nav_sensors["navigation_eta"].field == "eta"
 
-    assert "distance_to_destination" in r1_sensors
+    assert "distance_to_destination" in nav_sensors
     assert (
-        r1_sensors["distance_to_destination"].device_class == SensorDeviceClass.DISTANCE
+        nav_sensors["distance_to_destination"].device_class
+        == SensorDeviceClass.DISTANCE
     )
     assert (
-        r1_sensors["distance_to_destination"].native_unit_of_measurement
+        nav_sensors["distance_to_destination"].native_unit_of_measurement
         == UnitOfLength.METERS
     )
 
-    assert "time_to_destination" in r1_sensors
-    assert r1_sensors["time_to_destination"].device_class == SensorDeviceClass.DURATION
+    assert "time_to_destination" in nav_sensors
+    assert nav_sensors["time_to_destination"].device_class == SensorDeviceClass.DURATION
     assert (
-        r1_sensors["time_to_destination"].native_unit_of_measurement
+        nav_sensors["time_to_destination"].native_unit_of_measurement
         == UnitOfTime.MINUTES
     )
     # Test duration conversion lambda (seconds to minutes)
-    assert r1_sensors["time_to_destination"].value_lambda(605.0) == 10.1
-    assert r1_sensors["time_to_destination"].value_lambda(None) is None
+    assert nav_sensors["time_to_destination"].value_lambda(605.0) == 10.1
+    assert nav_sensors["time_to_destination"].value_lambda(None) is None
 
-    assert "battery_level_at_destination" in r1_sensors
+    assert "battery_level_at_destination" in nav_sensors
     assert (
-        r1_sensors["battery_level_at_destination"].device_class
+        nav_sensors["battery_level_at_destination"].device_class
         == SensorDeviceClass.BATTERY
     )
     assert (
-        r1_sensors["battery_level_at_destination"].native_unit_of_measurement
+        nav_sensors["battery_level_at_destination"].native_unit_of_measurement
         == PERCENTAGE
     )
     assert (
-        r1_sensors["battery_level_at_destination"].state_class
+        nav_sensors["battery_level_at_destination"].state_class
         == SensorStateClass.MEASUREMENT
     )
 
 
-def test_rivian_sensor_entity_navigation_states() -> None:
-    """Test RivianSensorEntity reporting active navigation metrics."""
-    data = {
-        "destination_name": {"value": "Irvine, CA"},
-        "destination_eta": {"value": "2026-08-19T05:31:40+00:00"},
-        "destination_distance_remaining": {"value": 11179.0},
-        "destination_duration_remaining": {"value": 605.0},
-        "destination_arrival_soc": {"value": 75.64},
-    }
+def test_rivian_navigation_sensor_entity_states() -> None:
+    """Test RivianNavigationSensorEntity reporting active and inactive navigation metrics."""
+    nav_data = NavigationData(
+        is_navigating=True,
+        destination_name="Irvine, CA",
+        destination_latitude=33.7206991,
+        destination_longitude=-117.7930813,
+        eta="2026-08-19T05:31:40+00:00",
+        distance_remaining_meters=11179.0,
+        duration_remaining_seconds=605.0,
+        arrival_soc=75.64,
+        route_name="I-5 N",
+    )
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = data
-    mock_coordinator.get.side_effect = lambda key: data.get(key, {}).get("value")
-    mock_entry = MagicMock()
+    mock_coordinator.data = nav_data
     mock_vehicle = {
         "id": "vehicle_123",
         "name": "Rivian Vehicle",
@@ -149,64 +152,65 @@ def test_rivian_sensor_entity_navigation_states() -> None:
         "model": "R1S",
     }
 
-    r1_sensors = {desc.key: desc for desc in SENSORS["R1"]}
+    nav_sensors = {desc.key: desc for desc in NAVIGATION_SENSORS}
 
     # Destination Name Sensor
-    dest_sensor = RivianSensorEntity(
-        mock_coordinator, mock_entry, r1_sensors["destination"], mock_vehicle
+    dest_sensor = RivianNavigationSensorEntity(
+        mock_coordinator, nav_sensors["destination"], mock_vehicle
     )
     assert dest_sensor.native_value == "Irvine, CA"
 
     # ETA Sensor
-    eta_sensor = RivianSensorEntity(
-        mock_coordinator, mock_entry, r1_sensors["navigation_eta"], mock_vehicle
+    eta_sensor = RivianNavigationSensorEntity(
+        mock_coordinator, nav_sensors["navigation_eta"], mock_vehicle
     )
     assert eta_sensor.native_value == "2026-08-19T05:31:40+00:00"
 
     # Distance Sensor
-    dist_sensor = RivianSensorEntity(
+    dist_sensor = RivianNavigationSensorEntity(
         mock_coordinator,
-        mock_entry,
-        r1_sensors["distance_to_destination"],
+        nav_sensors["distance_to_destination"],
         mock_vehicle,
     )
     assert dist_sensor.native_value == 11179.0
 
     # Time Duration Sensor (minutes)
-    time_sensor = RivianSensorEntity(
+    time_sensor = RivianNavigationSensorEntity(
         mock_coordinator,
-        mock_entry,
-        r1_sensors["time_to_destination"],
+        nav_sensors["time_to_destination"],
         mock_vehicle,
     )
     assert time_sensor.native_value == 10.1
 
     # Arrival Battery Level Sensor
-    soc_sensor = RivianSensorEntity(
+    soc_sensor = RivianNavigationSensorEntity(
         mock_coordinator,
-        mock_entry,
-        r1_sensors["battery_level_at_destination"],
+        nav_sensors["battery_level_at_destination"],
         mock_vehicle,
     )
     assert soc_sensor.native_value == 75.64
 
+    # When not navigating: sensors return None (clean idle)
+    mock_coordinator.data = NavigationData(is_navigating=False)
+    assert dest_sensor.native_value is None
+    assert dist_sensor.native_value is None
+    assert time_sensor.native_value is None
+    assert eta_sensor.native_value is None
+    assert soc_sensor.native_value is None
 
-def test_vehicle_coordinator_process_parallax_data() -> None:
-    """Test VehicleCoordinator ingesting Parallax message frames."""
+
+def test_navigation_coordinator_process_parallax_data() -> None:
+    """Test NavigationCoordinator ingesting Parallax message frames."""
     mock_hass = MagicMock()
     mock_entry = MagicMock()
     mock_client = MagicMock()
 
-    coordinator = VehicleCoordinator(
+    coordinator = NavigationCoordinator(
         hass=mock_hass,
         config_entry=mock_entry,
         client=mock_client,
         vehicle_id="vehicle_123",
     )
-    coordinator.data = {
-        "batteryLevel": {"value": 77.0},
-        "powerState": {"value": "ready"},
-    }
 
     trip_info_frame = {
         "payload": {
@@ -221,18 +225,19 @@ def test_vehicle_coordinator_process_parallax_data() -> None:
 
     coordinator._process_parallax_data(trip_info_frame)
 
-    assert coordinator.get("destination_name") == "Irvine, CA"
-    assert coordinator.get("destination_latitude") == 33.7206991
-    assert coordinator.get("destination_longitude") == -117.7930813
-    assert coordinator.get("destination_distance_remaining") == 11179.0
-    assert coordinator.get("destination_duration_remaining") == 605.0
-    assert coordinator.get("destination_arrival_soc") == 75.64
-    assert coordinator.get("destination_route_name") == "I-5 N"
+    assert coordinator.data.is_navigating is True
+    assert coordinator.data.destination_name == "Irvine, CA"
+    assert coordinator.data.destination_latitude == 33.7206991
+    assert coordinator.data.destination_longitude == -117.7930813
+    assert coordinator.data.distance_remaining_meters == 11179.0
+    assert coordinator.data.duration_remaining_seconds == 605.0
+    assert coordinator.data.arrival_soc == 75.64
+    assert coordinator.data.route_name == "I-5 N"
 
     # Test route cancellation / clearing
-    coordinator._clear_navigation_data()
-    assert coordinator.get("destination_name") is None
-    assert coordinator.get("destination_latitude") is None
-    assert coordinator.get("destination_longitude") is None
-    assert coordinator.get("destination_distance_remaining") is None
-    assert coordinator.get("batteryLevel") == 77.0  # Non-navigation data retained
+    coordinator.clear_navigation()
+    assert coordinator.data.is_navigating is False
+    assert coordinator.data.destination_name is None
+    assert coordinator.data.destination_latitude is None
+    assert coordinator.data.destination_longitude is None
+    assert coordinator.data.distance_remaining_meters is None

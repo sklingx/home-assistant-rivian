@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
 import time
@@ -34,7 +35,7 @@ from .const import (
     INVALID_SENSOR_STATES,
     VEHICLE_STATE_API_FIELDS,
 )
-from .helpers import CLEAR_NAVIGATION_DATA, parse_parallax_navigation_payload, redact
+from .helpers import parse_parallax_navigation_payload, redact
 
 _LOGGER = logging.getLogger(__name__)
 T = TypeVar("T", bound=dict[str, Any] | list[dict[str, Any]])
@@ -208,6 +209,181 @@ class DriverKeyCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
         )
 
 
+@dataclass
+class NavigationData:
+    """Dataclass representing navigation state."""
+
+    is_navigating: bool = False
+    destination_name: str | None = None
+    destination_latitude: float | None = None
+    destination_longitude: float | None = None
+    eta: str | None = None
+    distance_remaining_meters: float | None = None
+    duration_remaining_seconds: float | None = None
+    arrival_soc: float | None = None
+    route_name: str | None = None
+    route_polyline: str | None = None
+    last_update: datetime | None = None
+
+
+class NavigationCoordinator(RivianDataUpdateCoordinator[NavigationData]):
+    """Navigation data update coordinator for Rivian."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        client: Rivian,
+        vehicle_id: str,
+    ) -> None:
+        """Initialize the coordinator."""
+        super().__init__(hass=hass, config_entry=config_entry, client=client)
+        self.vehicle_id = vehicle_id
+        self._unsub_handler: Coroutine[None, None, None] | None = None
+        self.data = NavigationData()
+
+    async def _fetch_data(self) -> ClientResponse:
+        """Fetch data (polling not used for navigation)."""
+        raise NotImplementedError("Polling navigation is not supported")
+
+    async def _async_update_data(self) -> NavigationData:
+        """Get the latest data from Rivian."""
+        if not self._unsub_handler:
+            self._unsub_handler = await self._subscribe_parallax()
+        return self.data or NavigationData()
+
+    async def _subscribe_parallax(self) -> Any:
+        """Subscribe to real-time Parallax RVM updates."""
+        try:
+            if not self.api._ws_monitor or not self.api._ws_monitor.connected:
+                return None
+            payload = {
+                "operationName": "ParallaxMessages",
+                "query": (
+                    "subscription ParallaxMessages($vehicleID: String!) {\n"
+                    "  parallaxMessages(vehicleId: $vehicleID) {\n"
+                    "    payload\n"
+                    "    sequenceNumber\n"
+                    "  }\n"
+                    "}"
+                ),
+                "variables": {"vehicleID": self.vehicle_id},
+            }
+            return await self.api._ws_monitor.start_subscription(
+                payload, self._process_parallax_data
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Failed to subscribe to Parallax updates for %s: %s",
+                self.vehicle_id,
+                err,
+            )
+            return None
+
+    @callback
+    def _process_parallax_data(self, data: dict[str, Any]) -> None:
+        """Process incoming Parallax RVM message."""
+        payload_wrapper = data.get("payload", {})
+        data_block = payload_wrapper.get("data", {})
+        parallax_msg = data_block.get("parallaxMessages")
+        if not parallax_msg or not isinstance(parallax_msg, dict):
+            return
+
+        raw_payload = parallax_msg.get("payload")
+        if not raw_payload:
+            return
+
+        nav_updates = parse_parallax_navigation_payload(raw_payload)
+        if not nav_updates:
+            return
+
+        _LOGGER.debug(
+            "Vehicle %s parallax navigation update: %s",
+            self.vehicle_id,
+            redact(nav_updates),
+        )
+
+        current = self.data or NavigationData()
+        now = datetime.now(timezone.utc)
+
+        dest_name = (
+            nav_updates["destination_name"]["value"]
+            if "destination_name" in nav_updates
+            else current.destination_name
+        )
+        dest_lat = (
+            nav_updates["destination_latitude"]["value"]
+            if "destination_latitude" in nav_updates
+            else current.destination_latitude
+        )
+        dest_lon = (
+            nav_updates["destination_longitude"]["value"]
+            if "destination_longitude" in nav_updates
+            else current.destination_longitude
+        )
+        route_name = (
+            nav_updates["destination_route_name"]["value"]
+            if "destination_route_name" in nav_updates
+            else current.route_name
+        )
+        polyline = (
+            nav_updates["destination_route_polyline"]["value"]
+            if "destination_route_polyline" in nav_updates
+            else current.route_polyline
+        )
+        arrival_soc = (
+            nav_updates["destination_arrival_soc"]["value"]
+            if "destination_arrival_soc" in nav_updates
+            else current.arrival_soc
+        )
+
+        dist = (
+            nav_updates["destination_distance_remaining"]["value"]
+            if "destination_distance_remaining" in nav_updates
+            else current.distance_remaining_meters
+        )
+        dur = (
+            nav_updates["destination_duration_remaining"]["value"]
+            if "destination_duration_remaining" in nav_updates
+            else current.duration_remaining_seconds
+        )
+        eta = (
+            nav_updates["destination_eta"]["value"]
+            if "destination_eta" in nav_updates
+            else current.eta
+        )
+
+        is_navigating = bool(dest_name or dest_lat is not None or (dist and dist > 0))
+
+        updated_nav = NavigationData(
+            is_navigating=is_navigating,
+            destination_name=dest_name,
+            destination_latitude=dest_lat,
+            destination_longitude=dest_lon,
+            eta=eta,
+            distance_remaining_meters=dist,
+            duration_remaining_seconds=dur,
+            arrival_soc=arrival_soc,
+            route_name=route_name,
+            route_polyline=polyline,
+            last_update=now,
+        )
+
+        self.async_set_updated_data(updated_nav)
+
+    @callback
+    def clear_navigation(self) -> None:
+        """Explicitly clear navigation state."""
+        self.async_set_updated_data(NavigationData())
+
+    async def async_shutdown(self) -> None:
+        """Shutdown coordinator and unsubscribe."""
+        if unsub := self._unsub_handler:
+            await unsub()
+            self._unsub_handler = None
+        await super().async_shutdown()
+
+
 class UserCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
     """User data update coordinator for Rivian."""
 
@@ -284,9 +460,11 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
         self.drivers_coordinator = DriverKeyCoordinator(
             hass=hass, config_entry=config_entry, client=client, vehicle_id=vehicle_id
         )
+        self.navigation_coordinator = NavigationCoordinator(
+            hass=hass, config_entry=config_entry, client=client, vehicle_id=vehicle_id
+        )
         self._initial = asyncio.Event()
         self._unsub_handler: Coroutine[None, None, None] | None = None
-        self._parallax_unsub_handler: Coroutine[None, None, None] | None = None
         self._awake = asyncio.Event()
         self._charging_schedule: dict[str, Any] | None = None
         self._last_schedule_fetch: float = 0.0
@@ -354,7 +532,6 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
                 properties=VEHICLE_STATE_API_FIELDS,
                 callback=self._process_new_data,
             )
-            self._parallax_unsub_handler = await self._subscribe_parallax()
 
             try:
                 await asyncio.wait_for(self._initial.wait(), INITIAL_UPDATE_TIMEOUT)
@@ -366,71 +543,13 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
 
         return self.data
 
-    async def _subscribe_parallax(self) -> Any:
-        """Subscribe to real-time Parallax RVM updates."""
-        try:
-            if not self.api._ws_monitor or not self.api._ws_monitor.connected:
-                return None
-            payload = {
-                "operationName": "ParallaxMessages",
-                "query": (
-                    "subscription ParallaxMessages($vehicleID: String!) {\n"
-                    "  parallaxMessages(vehicleId: $vehicleID) {\n"
-                    "    payload\n"
-                    "    sequenceNumber\n"
-                    "  }\n"
-                    "}"
-                ),
-                "variables": {"vehicleID": self.vehicle_id},
-            }
-            return await self.api._ws_monitor.start_subscription(
-                payload, self._process_parallax_data
-            )
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.debug(
-                "Failed to subscribe to Parallax updates for %s: %s",
-                self.vehicle_id,
-                err,
-            )
-            return None
-
-    @callback
-    def _process_parallax_data(self, data: dict[str, Any]) -> None:
-        """Process incoming Parallax RVM message."""
-        payload_wrapper = data.get("payload", {})
-        data_block = payload_wrapper.get("data", {})
-        parallax_msg = data_block.get("parallaxMessages")
-        if not parallax_msg or not isinstance(parallax_msg, dict):
-            return
-
-        raw_payload = parallax_msg.get("payload")
-        if not raw_payload:
-            return
-
-        nav_updates = parse_parallax_navigation_payload(raw_payload)
-        if nav_updates:
-            _LOGGER.debug(
-                "Vehicle %s parallax navigation update: %s",
-                self.vehicle_id,
-                redact(nav_updates),
-            )
-            current = dict(self.data) if self.data else {}
-            self.async_set_updated_data(current | nav_updates)
-            if not self._initial.is_set():
-                self._initial.set()
-
-    @callback
-    def _clear_navigation_data(self) -> None:
-        """Clear active navigation state."""
-        current = dict(self.data) if self.data else {}
-        self.async_set_updated_data(current | CLEAR_NAVIGATION_DATA)
-
     async def _fetch_data(self) -> ClientResponse:
         """Fetch the data."""
         raise NotImplementedError("Polling VehicleState no longer allowed")
 
     async def async_shutdown(self) -> None:
         await self._unsubscribe(True)
+        await self.navigation_coordinator.async_shutdown()
         return await super().async_shutdown()
 
     @callback
@@ -490,9 +609,6 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
             await unsub()
             self._unsub_handler = None
             self._initial.clear()
-        if unsub_p := self._parallax_unsub_handler:
-            await unsub_p()
-            self._parallax_unsub_handler = None
         if close_monitor and (monitor := self.api._ws_monitor):
             await monitor.close()
 

@@ -133,17 +133,6 @@ SENSORS: Final[dict[str, tuple[RivianSensorEntityDescription, ...]]] = {
             suggested_display_precision=1,
         ),
         RivianSensorEntityDescription(
-            key="battery_level_at_destination",
-            translation_key="battery_level_at_destination",
-            field="destination_arrival_soc",
-            name="Battery Level at Destination",
-            icon="mdi:battery-arrow-down-outline",
-            device_class=SensorDeviceClass.BATTERY,
-            native_unit_of_measurement=PERCENTAGE,
-            state_class=SensorStateClass.MEASUREMENT,
-            suggested_display_precision=1,
-        ),
-        RivianSensorEntityDescription(
             key="battery_limit",
             field="batteryLimit",
             name="Battery State of Charge Limit",
@@ -173,45 +162,6 @@ SENSORS: Final[dict[str, tuple[RivianSensorEntityDescription, ...]]] = {
             field="brakeFluidLow",
             name="Brake Fluid Level Low",
             icon="mdi:car-brake-fluid-level",
-        ),
-        RivianSensorEntityDescription(
-            key="destination",
-            translation_key="destination",
-            field="destination_name",
-            name="Destination",
-            icon="mdi:map-marker-destination",
-        ),
-        RivianSensorEntityDescription(
-            key="distance_to_destination",
-            translation_key="distance_to_destination",
-            field="destination_distance_remaining",
-            name="Distance to Destination",
-            icon="mdi:map-marker-distance",
-            device_class=SensorDeviceClass.DISTANCE,
-            native_unit_of_measurement=UnitOfLength.METERS,
-            state_class=SensorStateClass.MEASUREMENT,
-            suggested_unit_of_measurement=UnitOfLength.KILOMETERS,
-            suggested_display_precision=1,
-        ),
-        RivianSensorEntityDescription(
-            key="navigation_eta",
-            translation_key="navigation_eta",
-            field="destination_eta",
-            name="Navigation ETA",
-            icon="mdi:clock-end",
-            device_class=SensorDeviceClass.TIMESTAMP,
-        ),
-        RivianSensorEntityDescription(
-            key="time_to_destination",
-            translation_key="time_to_destination",
-            field="destination_duration_remaining",
-            name="Time to Destination",
-            icon="mdi:timer-outline",
-            device_class=SensorDeviceClass.DURATION,
-            native_unit_of_measurement=UnitOfTime.MINUTES,
-            state_class=SensorStateClass.MEASUREMENT,
-            value_lambda=lambda v: round(v / 60, 1) if v is not None else None,
-            suggested_display_precision=0,
         ),
         RivianSensorEntityDescription(
             key="driver_temperature",
@@ -1087,31 +1037,66 @@ BINARY_SENSORS: Final[dict[str, tuple[RivianBinarySensorEntityDescription, ...]]
     ),
 }
 
-PARALLAX_NAVIGATION_FIELDS: Final[set[str]] = {
-    "destination_name",
-    "destination_latitude",
-    "destination_longitude",
-    "destination_eta",
-    "destination_distance_remaining",
-    "destination_duration_remaining",
-    "destination_arrival_soc",
-    "destination_route_name",
-    "destination_route_polyline",
-}
+NAVIGATION_SENSORS: Final[tuple[RivianSensorEntityDescription, ...]] = (
+    RivianSensorEntityDescription(
+        key="destination",
+        translation_key="destination",
+        field="destination_name",
+        name="Destination",
+        icon="mdi:map-marker-destination",
+    ),
+    RivianSensorEntityDescription(
+        key="distance_to_destination",
+        translation_key="distance_to_destination",
+        field="distance_remaining_meters",
+        name="Distance to Destination",
+        icon="mdi:map-marker-distance",
+        device_class=SensorDeviceClass.DISTANCE,
+        native_unit_of_measurement=UnitOfLength.METERS,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_unit_of_measurement=UnitOfLength.KILOMETERS,
+        suggested_display_precision=1,
+    ),
+    RivianSensorEntityDescription(
+        key="navigation_eta",
+        translation_key="navigation_eta",
+        field="eta",
+        name="Navigation ETA",
+        icon="mdi:clock-end",
+        device_class=SensorDeviceClass.TIMESTAMP,
+    ),
+    RivianSensorEntityDescription(
+        key="time_to_destination",
+        translation_key="time_to_destination",
+        field="duration_remaining_seconds",
+        name="Time to Destination",
+        icon="mdi:timer-outline",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_lambda=lambda v: round(v / 60, 1) if v is not None else None,
+        suggested_display_precision=0,
+    ),
+    RivianSensorEntityDescription(
+        key="battery_level_at_destination",
+        translation_key="battery_level_at_destination",
+        field="arrival_soc",
+        name="Battery Level at Destination",
+        icon="mdi:battery-arrow-down-outline",
+        device_class=SensorDeviceClass.BATTERY,
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+    ),
+)
 
 VEHICLE_STATE_API_FIELDS: Final[set[str]] = {
-    *(
-        description.field
-        for sensor in SENSORS.values()
-        for description in sensor
-        if description.field not in PARALLAX_NAVIGATION_FIELDS
-    ),
+    *(description.field for sensor in SENSORS.values() for description in sensor),
     *(
         field
         for sensors in BINARY_SENSORS.values()
         for sensor in sensors
         for field in ([sensor.field] if isinstance(sensor.field, str) else sensor.field)
-        if field not in PARALLAX_NAVIGATION_FIELDS
     ),
     "gnssLocation",
     "otaCurrentVersion",
