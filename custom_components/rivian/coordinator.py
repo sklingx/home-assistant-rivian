@@ -484,24 +484,25 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
             now - self._last_schedule_fetch > cooldown
         ):
             self._last_schedule_fetch = now
-            try:
-                response = await self.api.get_charging_schedules(self.vehicle_id)
-                res_json = await response.json()
-                if (
-                    res_json
-                    and "data" in res_json
-                    and res_json["data"].get("getVehicle")
-                ):
-                    schedules = res_json["data"]["getVehicle"].get(
-                        "chargingSchedules", []
-                    )
-                    if schedules:
-                        old_schedule = self._charging_schedule
-                        self._charging_schedule = schedules[0]
-                        if old_schedule != self._charging_schedule:
-                            self.async_update_listeners()
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.error("Error fetching charging schedule: %s", err)
+            if hasattr(self.api, "get_charging_schedules"):
+                try:
+                    response = await self.api.get_charging_schedules(self.vehicle_id)
+                    res_json = await response.json()
+                    if (
+                        res_json
+                        and "data" in res_json
+                        and res_json["data"].get("getVehicle")
+                    ):
+                        schedules = res_json["data"]["getVehicle"].get(
+                            "chargingSchedules", []
+                        )
+                        if schedules:
+                            old_schedule = self._charging_schedule
+                            self._charging_schedule = schedules[0]
+                            if old_schedule != self._charging_schedule:
+                                self.async_update_listeners()
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.error("Error fetching charging schedule: %s", err)
 
             if self._charging_schedule is None:
                 self._charging_schedule = dict(DEFAULT_CHARGING_SCHEDULE)
@@ -511,10 +512,11 @@ class VehicleCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
         """Update charging schedule via Rivian API mutation."""
         current = dict(await self.get_charging_schedule_data(force_refresh=True))
         current.update(schedule)
-        try:
-            await self.api.set_charging_schedules(self.vehicle_id, [current])
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Error setting charging schedule: %s", err)
+        if hasattr(self.api, "set_charging_schedules"):
+            try:
+                await self.api.set_charging_schedules(self.vehicle_id, [current])
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error("Error setting charging schedule: %s", err)
         self._charging_schedule = current
         self.async_update_listeners()
 
