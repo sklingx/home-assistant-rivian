@@ -158,12 +158,8 @@ class ChargingCoordinator(RivianDataUpdateCoordinator[dict[str, Any]]):
         )
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Get the latest data from Rivian, gracefully handling deprecated endpoint failures."""
-        try:
-            return await super()._async_update_data()
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("Live charging session endpoint error: %s", err)
-            return self.data or {}
+        """Bypass deprecated getLiveSessionData endpoint while preserving coordinator interface."""
+        return self.data or {}
 
     def adjust_update_interval(self, is_plugged_in: bool) -> None:
         """Adjust update interval based on plugged in status."""

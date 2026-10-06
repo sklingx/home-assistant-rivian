@@ -250,6 +250,9 @@ class RivianNavigationSensorEntity(RivianEntity[NavigationCoordinator], SensorEn
             return None
         if fn := self.entity_description.value_lambda:
             return fn(val)
+        if getattr(self.entity_description, "device_class", None) == SensorDeviceClass.TIMESTAMP and isinstance(val, str):
+            from homeassistant.util import dt as dt_util
+            return dt_util.parse_datetime(val)
         return val
 
     @property
